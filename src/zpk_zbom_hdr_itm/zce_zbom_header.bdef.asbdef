@@ -4,7 +4,7 @@ strict ( 2 ); //Uncomment this line in order to enable strict mode 2. The strict
 define behavior for zce_zbom_header alias ZBOMHeader
 //late numbering
 lock master
-authorization master ( instance )
+authorization master ( global, instance )
 //etag master <field_name>
 {
   //  create ( authorization : global );
@@ -13,10 +13,12 @@ authorization master ( instance )
   field ( readonly ) BillOfMaterial, BillOfMaterialCategory, Material, Plant, BillOfMaterialVariantUsage, SalesOrder, SalesOrderItem;
   association _Item { create; }
 
-//  action explodezbom
-//    parameter zabs_zbom_p result [1] $self;
+  //  action explodezbom
+  //    parameter zabs_zbom_p result [1] $self;
 
   action detailViewList result [1] $self;
+  static action ( authorization : global ) scheduleExcelExport parameter zabs_zbom_export_p;
+
 }
 
 define behavior for zce_zbom_item alias ZBOMItem

@@ -55,6 +55,7 @@ define root custom entity zce_zbom_detail
       ChangedOn                    : abp_lastchange_date; -- Field 15 - Changed On
       ChangedBy                    : abp_lastchange_user; -- Field 16 - Changed By
       IsBomItemSparePart           : abap_boolean; -- Field 17 - Item Spare Part Indicator
+      ComponentScrapInPercent      : abap.dec(5,2); -- Field 18 - Component Scrap in Percent
 
       BillOfMaterialVariant        : abap.char(2);
       BillOfMaterialVersion        : abap.char(4);

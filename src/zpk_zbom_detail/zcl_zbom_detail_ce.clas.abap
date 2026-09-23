@@ -5,6 +5,23 @@ CLASS zcl_zbom_detail_ce DEFINITION
 
   PUBLIC SECTION.
     INTERFACES if_rap_query_provider .
+
+    TYPES: tt_zce_zbom_detail TYPE STANDARD TABLE OF zce_zbom_detail WITH DEFAULT KEY.
+
+    METHODS explode_header_for_export
+      IMPORTING
+                iv_billofmaterial             TYPE string
+                iv_billofmaterialcategory     TYPE string
+                iv_billofmaterialvariantusage TYPE string
+                iv_material                   TYPE string
+                iv_plant                      TYPE string
+                iv_salesorder                 TYPE string
+                iv_salesorderitem             TYPE string
+                iv_requiredquantity           TYPE string
+                iv_tabix                      TYPE sy-tabix DEFAULT 1
+      RETURNING VALUE(rt_result)              TYPE tt_zce_zbom_detail.
+
+
   PROTECTED SECTION.
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_key_field,
@@ -251,7 +268,44 @@ ENDCLASS.
 
 
 
-CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
+CLASS zcl_zbom_detail_ce IMPLEMENTATION.
+
+
+  METHOD explode_header_for_export.
+    DATA(lt_result_tmp) = processing_api(
+                            iv_billofmaterial             = iv_billofmaterial
+                            iv_billofmaterialcategory     = iv_billofmaterialcategory
+                            iv_billofmaterialvariantusage = iv_billofmaterialvariantusage
+                            iv_material                   = iv_material
+                            iv_plant                      = iv_plant
+                            iv_salesorder                 = iv_salesorder
+                            iv_salesorderitem             = iv_salesorderitem
+                            iv_itemindexstring            = ''
+                            iv_requiredquantity           = iv_requiredquantity
+                          ).
+
+    get_tree_view(
+      EXPORTING
+        iv_tabix  = iv_tabix
+      CHANGING
+        ct_result = lt_result_tmp
+    ).
+
+    SELECT SINGLE BaseUnit FROM i_product
+      WHERE Product = @iv_material
+      INTO @DATA(lv_unitheader).
+
+    LOOP AT lt_result_tmp ASSIGNING FIELD-SYMBOL(<lfs_result_tmp>).
+      <lfs_result_tmp>-BillOfMaterialCategory = iv_billofmaterialcategory.
+      <lfs_result_tmp>-MaterialHeader         = iv_material.
+      <lfs_result_tmp>-SalesOrder             = iv_salesorder.
+      <lfs_result_tmp>-SalesOrderItem         = iv_salesorderitem.
+      <lfs_result_tmp>-RequiredQuantityHeader = iv_requiredquantity.
+      <lfs_result_tmp>-UomHeader              = lv_unitheader.
+    ENDLOOP.
+
+    rt_result = lt_result_tmp.
+  ENDMETHOD.
 
 
   METHOD if_rap_query_provider~select.
@@ -448,7 +502,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
           lv_min_level TYPE i VALUE 99,
           lv_cur_level TYPE i,
           lv_search    TYPE i,
-          lv_mat_norm  TYPE matnr,   " material của row hiện tại - normalized
+          lv_mat_norm  TYPE matnr,   " node cha (BomHhdrMatlHierNode) của row hiện tại - normalized
           lv_comp_norm TYPE matnr.   " component của row đang scan - normalized
 
     " Tìm min level
@@ -460,9 +514,40 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
     ENDLOOP.
 
     " -------------------------------------------------------
+    " FIX: đưa (các) dòng level = min level (root thật sự, vd
+    " component duy nhất ở BomExplosionLevel = 01) lên ĐẦU bảng.
+    " Các method fill ct_result (recursive2/run_mbom2/processing_kbomX)
+    " thường APPEND dòng root này SAU CÙNG (sau khi đệ quy hết children),
+    " nên nếu không reorder, PASS 2 bên dưới sẽ đếm nó như 1 sibling
+    " bình thường theo vị trí tabix -> root bị đẩy xuống cuối
+    " (vd "1.22" thay vì "1.1").
+    " -------------------------------------------------------
+    DATA lt_root     LIKE ct_result.
+    DATA lt_children LIKE ct_result.
+
+    LOOP AT ct_result INTO DATA(ls_reorder).
+      IF CONV i( ls_reorder-BomExplosionLevel ) = lv_min_level.
+        APPEND ls_reorder TO lt_root.
+      ELSE.
+        APPEND ls_reorder TO lt_children.
+      ENDIF.
+    ENDLOOP.
+
+    CLEAR ct_result.
+    APPEND LINES OF lt_root     TO ct_result.
+    APPEND LINES OF lt_children TO ct_result.
+
+    " -------------------------------------------------------
     " PASS 1: Xác định parent
-    " Cha = row gần nhất phía trên có BillOfMaterialComponent = MATERIAL của row hiện tại
-    " (sau khi normalize ALPHA)
+    " Cha = row gần nhất phía trên có BillOfMaterialComponent =
+    " BomHhdrMatlHierNode (node cha trực tiếp) của row hiện tại
+    " (sau khi normalize ALPHA).
+    " FIX: trước đây so khớp với field Material - field này không
+    " đảm bảo phản ánh đúng "cha trực tiếp" ở mọi nhánh xử lý
+    " (processing_kbom4...), trong khi BomHhdrMatlHierNode được set
+    " nhất quán = material cha ở recursive2/run_mbom2 và đã verify
+    " đúng bằng debug thực tế (vd row BomHhdrMatlHierNode=200009365
+    " khớp đúng với row có BillOfMaterialComponent=200009365).
     " -------------------------------------------------------
     LOOP AT ct_result ASSIGNING FIELD-SYMBOL(<lfs>).
       lv_tabix         = sy-tabix.
@@ -471,8 +556,8 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
       ls_node-treeview = ''.
       ls_node-parent   = -1.
 
-      " Normalize material của row hiện tại
-      lv_mat_norm = |{ <lfs>-Material ALPHA = IN }|.
+      " Normalize node cha (BomHhdrMatlHierNode) của row hiện tại
+      lv_mat_norm = |{ <lfs>-BomHhdrMatlHierNode ALPHA = IN }|.
 
       IF lv_cur_level > lv_min_level.
         lv_search = lv_tabix - 1.
@@ -597,45 +682,6 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
     ENDLOOP.
 
     ct_result = lt_result_sorted.
-
-*    DATA: lv_tree    TYPE string,
-*          lt_counter TYPE TABLE OF i WITH DEFAULT KEY,
-*          lv_level   TYPE i,
-*          lv_idx     TYPE i.
-*
-*    "Init counter table với 10 level
-*    DO 10 TIMES.
-*      APPEND 0 TO lt_counter.
-*    ENDDO.
-*
-*    LOOP AT ct_result ASSIGNING FIELD-SYMBOL(<lfs_result>).
-*      lv_level = <lfs_result>-BomExplosionLevel + 1.  "← +1 vì level 0 = cấp 1
-*
-*      "Reset tất cả level con khi lên level cha
-*      lv_idx = lv_level + 1.
-*      WHILE lv_idx <= 10.
-*        lt_counter[ lv_idx ] = 0.
-*        ADD 1 TO lv_idx.
-*      ENDWHILE.
-*
-*      "Tăng counter của level hiện tại
-*      lt_counter[ lv_level ] = lt_counter[ lv_level ] + 1.
-*
-*      "Build tree string
-*      CLEAR lv_tree.
-*      DO lv_level TIMES.
-*        lv_idx = sy-index.
-*        IF lv_idx = 1.
-**          lv_tree = |{ lt_counter[ lv_idx ] }|.
-*          lv_tree = iv_tabix.
-*          CONDENSE: lv_tree NO-GAPS.
-*        ELSE.
-*          lv_tree = |{ lv_tree }.{ lt_counter[ lv_idx ] }|.
-*        ENDIF.
-*      ENDDO.
-*
-*      <lfs_result>-TreeView = lv_tree.
-*    ENDLOOP.
   ENDMETHOD.
 
 
@@ -1433,7 +1479,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
 
     """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
     " Call API - uses your existing zcl_call_api utility
-    DATA(lv_xml_mbom) = zcl_call_api=>call_api(
+    DATA(lv_xml_mbom) = zcl_call_api_mbom=>call_api(
       iv_body        = ''
       iv_endpoint    = lv_endpoint_mbom
       iv_method      = 'GET'
@@ -1442,7 +1488,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
 
     """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
     "Parse data into itab result
-    IF zcl_call_api=>code = '200'.
+    IF zcl_call_api_mbom=>code = '200'.
       DATA(lt_elements) = extract_elements(
         iv_xml = lv_xml_mbom
         iv_tag = 'd:element'
@@ -1503,6 +1549,9 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
         <lfs_result>-changedby = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:last_changed_by_user' ).
         "Field 17 - Item Spare Part Indicator
         <lfs_result>-isbomitemsparepart = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:is_b_o_m_item_spare_part' ).
+        "Field 18 - Component Scrap In Percent
+        <lfs_result>-ComponentScrapInPercent = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:comp_scrap_itm' ).
+
         <lfs_result>-billofmaterialvariant = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:bill_of_material_variant' ).
         <lfs_result>-billofmaterialversion = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:b_o_m_version' ).
         <lfs_result>-billofmaterialitemnodenumber = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:item_node' ).
@@ -1739,7 +1788,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
         <lfs_result>-billofmaterialvariant = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:bill_of_material_variant' ).
         <lfs_result>-billofmaterialversion = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:b_o_m_version' ).
         <lfs_result>-billofmaterialitemnodenumber = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:item_node' ).
-        <lfs_result>-headerchangedocument = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:bom_change_number' ).
+        <lfs_result>-headerchangedocument = get_tag_value( iv_xml = lv_elem_xml iv_tag = 'd:comp_scrap_itm' ).
       ENDLOOP.
       SORT lt_result_tmp BY itemindex.
       APPEND LINES OF lt_result_tmp TO ct_result.
@@ -1849,6 +1898,27 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
       DATA(lv_bom_cat) = ls_bomcategory-range[ 1 ]-low.
     ENDIF.
 
+    "NinhNH Updated - Determine allowed BillOfMaterialVariant(s):
+    "plants in the 673* series (e.g. 6731, 673K) also use alternative BOM variants A*/B*/X*/G*/M*
+    DATA(lv_is_673_plant) = abap_false.
+    LOOP AT lr_plant INTO DATA(ls_plant_chk).
+      IF ls_plant_chk-low(3) = '673' OR ( ls_plant_chk-high IS NOT INITIAL AND ls_plant_chk-high(3) = '673' ).
+        lv_is_673_plant = abap_true.
+        EXIT.
+      ENDIF.
+    ENDLOOP.
+
+    DATA lr_bom_variant TYPE RANGE OF i_materialbomlink-billofmaterialvariant.
+    lr_bom_variant = VALUE #( ( sign = 'I' option = 'EQ' low = '01' ) ).
+    IF lv_is_673_plant = abap_true.
+      lr_bom_variant = VALUE #( BASE lr_bom_variant
+        ( sign = 'I' option = 'CP' low = 'A*' )
+        ( sign = 'I' option = 'CP' low = 'B*' )
+        ( sign = 'I' option = 'CP' low = 'X*' )
+        ( sign = 'I' option = 'CP' low = 'G*' )
+        ( sign = 'I' option = 'CP' low = 'M*' ) ).
+    ENDIF.
+
     "Get MATERIAL, PLANT, SALESORDER, SALESORDERITEM
     IF lv_bom_cat = 'M'.
       "Processing key fields MBOM
@@ -1857,7 +1927,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
                       a~plant
       FROM I_MaterialBOMLink AS a
       WHERE a~BillOfMaterial IN @ls_bom-range
-            AND a~BillOfMaterialVariant = '01' "NinhNH Updated
+            AND a~BillOfMaterialVariant IN @lr_bom_variant "NinhNH Updated
             AND a~BillOfMaterialCategory = 'M'
       INTO TABLE @DATA(lt_bom_m).
     ELSEIF lv_bom_cat = 'K'.
@@ -2319,8 +2389,6 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
           lv_so_item TYPE n LENGTH 6 VALUE '000010'.
     DATA: lv_quant_before TYPE p.
 
-*    DATA: lv_bomlevel TYPE n LENGTH 2 VALUE '00'.
-
     lv_product  = iv_material.
     lv_product = |{ lv_product WIDTH = 18 ALIGN = RIGHT PAD = '0' }|.
 
@@ -2346,54 +2414,36 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
            AND salesorderitem         = @lv_so_item
          INTO @DATA(ls_bom_key).
 
-*        " 1. Check material có tồn tại ở plant không
-*        SELECT SINGLE *
-*          FROM i_product                    " hoặc i_productplant
-*          inner join i_plant
-*
-*          WHERE Product = @lv_product
-*            AND Plant = @lv_plant
-*          INTO @DATA(ls_marc).
-**        out->write( |MARC found: { sy-subrc }| ).
-
         " 2. Check BOM link có đúng SO không
         SELECT *
           FROM i_salesorderbomlink
           WHERE material               = @lv_product
             AND plant                  = @lv_plant
             AND billofmaterialcategory = 'K'
-*            AND SalesOrder = @lv_so
-*            AND SalesOrderItem = @lv_so_item
           INTO TABLE @DATA(lt_bom_links).
-*        out->write( lt_bom_links ).
         CHECK sy-subrc = 0.
-*        " 3. Check BOM header tồn tại không
+
         SELECT  *
           FROM i_salesorderbomheaderdex
           WHERE billofmaterial         = @ls_bom_key-billofmaterial
             AND billofmaterialcategory = 'K'
           INTO TABLE @DATA(ls_bom_hdr).
-**        out->write( |BOM HDR: { sy-subrc }| ).
-*        out->write( ls_bom_hdr ).
 
         READ ENTITIES OF I_SalesOrderBillOfMaterialTP_2
-          ENTITY SalesBillOfMaterial            " ← đúng theo Content Assist
+          ENTITY SalesBillOfMaterial
           EXECUTE ExplodeBOM
           FROM VALUE #( (
               %key-BillOfMaterial            = ls_bom_key-billofmaterial
               %key-BillOfMaterialCategory    = lv_bom_cat
               %key-BillOfMaterialVariant     = ls_bom_key-billofmaterialvariant
-*        %key-BillOfMaterialVersion     = ''
               %key-EngineeringChangeDocument = ''
               %key-Material                  = lv_product
               %key-Plant                     = lv_plant
 
-              " Ctrl+Space sau %param- để xem đúng fields
               %param-BOMExplosionDate           = cl_abap_context_info=>get_system_date( )
               %param-BOMExplosionIsMultilevel   = abap_true
               %param-RequiredQuantity           = lv_requiredquantity
               %param-BOMExplosionApplication    = 'PP01'
-*          %param-EngineeringChangeDocument  = ''
               %param-BillOfMaterialItemCategory = ''
               %param-SalesOrder                 = ls_bom_key-salesorder
               %param-SalesOrderItem             = ls_bom_key-salesorderitem
@@ -2406,6 +2456,8 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
     ENDTRY.
 
     IF lt_result IS NOT INITIAL.
+      " ComponentScrapInPercent là field master của BOM item, action
+      " ExplodeBOM không trả về, nên phải lấy kèm ở đây cùng IsAssembly.
       SELECT FROM I_SlsOrdBillOfMaterialItemTP_2
         FIELDS BillOfMaterial,
                BillOfMaterialCategory,
@@ -2414,7 +2466,8 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
                HeaderChangeDocument,
                Material,
                Plant,
-               IsAssembly
+               IsAssembly,
+               ComponentScrapInPercent
         FOR ALL ENTRIES IN @lt_result
         WHERE BillOfMaterial            = @lt_result-%param-BillOfMaterial
           AND BillOfMaterialCategory    = @lt_result-%param-BillOfMaterialCategory
@@ -2427,7 +2480,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
 
       READ ENTITIES OF I_BillOfMaterialTP_2
         ENTITY BillOfMaterialItem
-        FIELDS ( IsAssembly )
+        FIELDS ( IsAssembly ComponentScrapInPercent )
         WITH VALUE
           #( FOR ls_res IN lt_result
           ( %key-BillOfMaterial            = ls_res-%param-BillOfMaterial
@@ -2451,7 +2504,6 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
         <lfs_result>-ItemIndex = lv_tabix.
         <lfs_result>-ItemIndexString = iv_itemindexstring.
 
-
         <lfs_result>-material = ls_result_tmp-%param-BOMHdrMatlHierNode.
         <lfs_result>-materialheader = ls_result_tmp-%param-BOMHdrRootMatlHierNode.
         <lfs_result>-UomHeader = ls_result_tmp-%param-BOMHeaderBaseUnit.
@@ -2470,6 +2522,7 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
             Plant = ls_result_tmp-%param-Plant.
         IF sy-subrc = 0.
           <lfs_result>-IsAssembly = ls_bom_items-IsAssembly.
+          <lfs_result>-ComponentScrapInPercent = ls_bom_items-ComponentScrapInPercent.
         ELSE.
           READ TABLE lt_bom_items_m INTO DATA(ls_bom_items_m) WITH KEY
                 %key-BillOfMaterial = ls_result_tmp-%param-BillOfMaterial
@@ -2483,9 +2536,11 @@ CLASS ZCL_ZBOM_DETAIL_CE IMPLEMENTATION.
               .
           IF sy-subrc = 0.
             <lfs_result>-IsAssembly = ls_bom_items_m-IsAssembly.
+            <lfs_result>-ComponentScrapInPercent = ls_bom_items_m-ComponentScrapInPercent.
           ENDIF.
         ENDIF.
       ENDLOOP.
     ENDIF.
   ENDMETHOD.
+
 ENDCLASS.

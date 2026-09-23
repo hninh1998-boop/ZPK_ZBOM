@@ -15,7 +15,7 @@ ENDCLASS.
 
 
 
-CLASS zcl_job_zbom_rp IMPLEMENTATION.
+CLASS ZCL_JOB_ZBOM_RP IMPLEMENTATION.
 
 
   METHOD if_apj_rt_exec_object~execute.

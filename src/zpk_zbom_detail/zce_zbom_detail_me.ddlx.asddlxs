@@ -147,4 +147,8 @@ annotate entity zce_zbom_detail with
   @UI.lineItem:       [{ position: 170, label: 'Item Spare Part Indicator' }]
   @UI.identification: [{ position: 170, label: 'Item Spare Part Indicator' }]
   IsBomItemSparePart;
+
+  @UI.lineItem:       [{ position: 180, label: 'Component Scrap in Percent' }]
+  @UI.identification: [{ position: 180, label: 'Component Scrap in Percent' }]
+  ComponentScrapInPercent;
 }

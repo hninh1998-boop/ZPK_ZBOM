@@ -113,132 +113,6 @@ ENDCLASS.
 CLASS ZCL_ZBOM_HEADER_CE IMPLEMENTATION.
 
 
-  METHOD if_rap_query_provider~select.
-    select( EXPORTING io_request = io_request io_response = io_response ).
-  ENDMETHOD.
-
-
-  METHOD get_component_tab.
-    DATA(lo_type) = cl_abap_typedescr=>describe_by_name( iv_tab ).
-    DATA(lo_struct) = CAST cl_abap_structdescr( lo_type ).
-    rt_tab = lo_struct->get_components( ).
-  ENDMETHOD.
-
-
-  METHOD class_constructor.
-    mt_materialbomlink_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_MaterialBOMLink' ).
-    mt_salesorderbomlink_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_SALESORDERBOMLINK' ).
-    mt_proddesc_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_PRODUCTDESCRIPTION' ).
-    mt_plantdesc_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_PLANTSTDVH' ).
-    mt_producttype_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_PRODUCTTYPEVH' ).
-    mt_SOSCHEDULELINE_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_SALESORDERSCHEDULELINE' ).
-  ENDMETHOD.
-
-
-  METHOD filtering.
-*    Get all filters as string
-    sql_filter_esc_quotes = cl_abap_dyn_prg=>escape_quotes_str( io_request->get_filter(  )->get_as_sql_string(  ) ).
-*    REPLACE  ALL OCCURRENCES OF 'BILLOFMATERIALVARIANTUSAGE' IN sql_filter_esc_quotes WITH source_view && '~BILLOFMATERIALVARIANTUSAGE'.
-    REPLACE  ALL OCCURRENCES OF 'PLANT ' IN sql_filter_esc_quotes WITH source_view && '~PLANT '.
-    REPLACE  ALL OCCURRENCES OF source_view && '~PLANTNAME' IN sql_filter_esc_quotes WITH 'I_PlantStdVH' && '~PLANTNAME'.
-*    REPLACE  ALL OCCURRENCES OF source_view && '~BILLOFMATERIALVARIANTUSAGEDESC' IN sql_filter_esc_quotes WITH 'I_BILLOFMATERIALUSAGE' && '~BILLOFMATERIALVARIANTUSAGEDESC'.
-*  SalesOrder and SalesOrderItem empty in case of Material BOM
-    IF bomcategory = 'M'.
-      REPLACE ALL OCCURRENCES OF `SALESORDERITEM = '000000' AND SALESORDER = ' ' AND ` IN sql_filter_esc_quotes WITH ''.
-    ELSEIF bomcategory = 'K'.
-      IF sql_filter_esc_quotes CS 'SALESORDER'.
-        REPLACE ALL OCCURRENCES OF 'SALESORDER' IN sql_filter_esc_quotes WITH 'I_SalesOrderBOMLink~SALESORDER'.
-      ENDIF.
-    ENDIF.
-  ENDMETHOD.
-
-
-  METHOD grouping.
-*    Get all grouped data into table
-    DATA(lt_grouped_element) = io_request->get_aggregation( )->get_grouped_elements( ).
-    DATA lt_grouped_element_final LIKE lt_grouped_element.
-    LOOP AT lt_grouped_element ASSIGNING FIELD-SYMBOL(<lv_grouped_element>).
-      READ TABLE req_elem_with_table ASSIGNING FIELD-SYMBOL(<ls_req_elem_with_table>) WITH KEY requested_element = <lv_grouped_element>.
-      IF sy-subrc IS INITIAL.
-        APPEND <ls_req_elem_with_table>-requested_element_with_table TO lt_grouped_element_final .
-      ENDIF.
-    ENDLOOP.
-    grouping = concat_lines_of(  table = lt_grouped_element sep = `, ` ).
-  ENDMETHOD.
-
-
-  METHOD requested_fields.
-    DATA(lt_requested_elements) = io_request->get_requested_elements( ).
-*    req_elem_final LIKE lt_requested_elements.
-    LOOP AT lt_requested_elements INTO DATA(lv_requested_element).
-      APPEND INITIAL LINE TO req_elem_with_table ASSIGNING FIELD-SYMBOL(<ls_req_elem_with_table>).
-      IF bomcategory EQ 'K'.
-        READ TABLE mt_salesorderbomlink_dd03nd INTO DATA(ls_salesorderbomlink_dd03nd) WITH KEY name = lv_requested_element.
-        IF sy-subrc IS INITIAL.
-          DATA(lv_req_elem_final) = |i_salesorderbomlink~{ lv_requested_element } |.
-          APPEND lv_req_elem_final TO req_elem_final.
-          <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-          CONTINUE.
-        ENDIF.
-
-        READ TABLE mt_soscheduleline_dd03nd INTO DATA(ls_soscheduleline_dd03nd) WITH KEY name = lv_requested_element.
-        IF sy-subrc IS INITIAL.
-          lv_req_elem_final = |I_SALESORDERSCHEDULELINE~{ lv_requested_element } |.
-          APPEND lv_req_elem_final TO req_elem_final.
-          <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-          CONTINUE.
-        ENDIF.
-
-      ELSEIF bomcategory EQ 'M'.
-        READ TABLE mt_materialbomlink_dd03nd INTO DATA(ls_materialbomlink_dd03nd) WITH KEY name = lv_requested_element.
-        IF sy-subrc IS INITIAL.
-          lv_req_elem_final = |i_materialbomlink~{ lv_requested_element } |.
-          APPEND lv_req_elem_final TO req_elem_final.
-          <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-          CONTINUE.
-        ENDIF.
-      ENDIF.
-
-*      READ TABLE mt_bomusage_dd03nd INTO DATA(ls_bomusage_dd03nd) WITH KEY fieldname = lv_requested_element.
-*      IF sy-subrc IS INITIAL.
-*        lv_req_elem_final = |{ ls_bomusage_dd03nd-strucobjn }~{ lv_requested_element } |.
-*        APPEND lv_req_elem_final TO req_elem_final.
-*        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-*        CONTINUE.
-*      ENDIF.
-
-*I_PRODUCTTYPEVH
-      READ TABLE mt_producttype_dd03nd INTO DATA(ls_producttype_dd03nd) WITH KEY name = lv_requested_element.
-      IF sy-subrc IS INITIAL.
-        lv_req_elem_final = |I_PRODUCT~{ lv_requested_element } |.
-        APPEND lv_req_elem_final TO req_elem_final.
-        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-        CONTINUE.
-      ENDIF.
-
-
-*I_PLANTSTDVH
-      READ TABLE mt_plantdesc_dd03nd INTO DATA(ls_plantdesc_dd03nd) WITH KEY name = lv_requested_element.
-      IF sy-subrc IS INITIAL.
-        lv_req_elem_final = |I_PLANTSTDVH~{ lv_requested_element } |.
-        APPEND lv_req_elem_final TO req_elem_final.
-        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-        CONTINUE.
-      ENDIF.
-
-*I_PRODUCTDESCRIPTION
-      READ TABLE mt_proddesc_dd03nd INTO DATA(ls_proddesc_dd03nd) WITH KEY name = lv_requested_element.
-      IF sy-subrc IS INITIAL.
-        lv_req_elem_final = |I_PRODUCTDESCRIPTION~{ lv_requested_element } |.
-        APPEND lv_req_elem_final TO req_elem_final.
-        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
-        CONTINUE.
-      ENDIF.
-    ENDLOOP.
-    requested_elements_string  = concat_lines_of( table = req_elem_final sep = `, ` ).
-  ENDMETHOD.
-
-
   METHOD select.
     TYPES: BEGIN OF lty_requested_elements,
              requested_element            TYPE string,
@@ -254,8 +128,15 @@ CLASS ZCL_ZBOM_HEADER_CE IMPLEMENTATION.
     TRY.
         DATA(lt_filter_range) = io_request->get_filter( )->get_as_ranges( abap_true ).
       CATCH cx_rap_query_filter_no_range.
+        IF io_request->is_total_numb_of_rec_requested( ).
+          io_response->set_total_number_of_records( 0 ).
+        ENDIF.
+        IF io_request->is_data_requested( ).
+          io_response->set_data( lt_explosion ).   " sửa ở đây: dùng lt_explosion (đang rỗng) thay vì VALUE #( )
+        ENDIF.
         RETURN.
     ENDTRY.
+
 *    "choose data source
     DATA: lv_bomcategory TYPE string.
     where(
@@ -268,6 +149,16 @@ CLASS ZCL_ZBOM_HEADER_CE IMPLEMENTATION.
       CHANGING
         bomcategory  = lv_bomcategory
     ).
+    IF lv_source_view IS INITIAL.
+      IF io_request->is_total_numb_of_rec_requested( ).
+        io_response->set_total_number_of_records( 0 ).
+      ENDIF.
+      IF io_request->is_data_requested( ).
+        io_response->set_data( lt_explosion ).   " sửa ở đây tương tự
+      ENDIF.
+      RETURN.
+    ENDIF.
+
     "handle paging
     DATA(offset_value)   = io_request->get_paging( )->get_offset( ).
     DATA(max_rows_value) = COND #( WHEN io_request->get_paging( )->get_page_size( ) = if_rap_query_paging=>page_size_unlimited THEN 1
@@ -565,6 +456,109 @@ CLASS ZCL_ZBOM_HEADER_CE IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD grouping.
+*    Get all grouped data into table
+    DATA(lt_grouped_element) = io_request->get_aggregation( )->get_grouped_elements( ).
+    DATA lt_grouped_element_final LIKE lt_grouped_element.
+    LOOP AT lt_grouped_element ASSIGNING FIELD-SYMBOL(<lv_grouped_element>).
+      READ TABLE req_elem_with_table ASSIGNING FIELD-SYMBOL(<ls_req_elem_with_table>) WITH KEY requested_element = <lv_grouped_element>.
+      IF sy-subrc IS INITIAL.
+        APPEND <ls_req_elem_with_table>-requested_element_with_table TO lt_grouped_element_final .
+      ENDIF.
+    ENDLOOP.
+    grouping = concat_lines_of(  table = lt_grouped_element sep = `, ` ).
+  ENDMETHOD.
+
+
+  METHOD class_constructor.
+    mt_materialbomlink_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_MaterialBOMLink' ).
+    mt_salesorderbomlink_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_SALESORDERBOMLINK' ).
+    mt_proddesc_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_PRODUCTDESCRIPTION' ).
+    mt_plantdesc_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_PLANTSTDVH' ).
+    mt_producttype_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_PRODUCTTYPEVH' ).
+    mt_SOSCHEDULELINE_dd03nd =  NEW zcl_zbom_header_ce( )->get_component_tab( iv_tab = 'I_SALESORDERSCHEDULELINE' ).
+  ENDMETHOD.
+
+
+  METHOD get_component_tab.
+    DATA(lo_type) = cl_abap_typedescr=>describe_by_name( iv_tab ).
+    DATA(lo_struct) = CAST cl_abap_structdescr( lo_type ).
+    rt_tab = lo_struct->get_components( ).
+  ENDMETHOD.
+
+
+  METHOD requested_fields.
+    DATA(lt_requested_elements) = io_request->get_requested_elements( ).
+*    req_elem_final LIKE lt_requested_elements.
+    LOOP AT lt_requested_elements INTO DATA(lv_requested_element).
+      APPEND INITIAL LINE TO req_elem_with_table ASSIGNING FIELD-SYMBOL(<ls_req_elem_with_table>).
+      IF bomcategory EQ 'K'.
+        READ TABLE mt_salesorderbomlink_dd03nd INTO DATA(ls_salesorderbomlink_dd03nd) WITH KEY name = lv_requested_element.
+        IF sy-subrc IS INITIAL.
+          DATA(lv_req_elem_final) = |i_salesorderbomlink~{ lv_requested_element } |.
+          APPEND lv_req_elem_final TO req_elem_final.
+          <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+          CONTINUE.
+        ENDIF.
+
+        READ TABLE mt_soscheduleline_dd03nd INTO DATA(ls_soscheduleline_dd03nd) WITH KEY name = lv_requested_element.
+        IF sy-subrc IS INITIAL.
+          lv_req_elem_final = |I_SALESORDERSCHEDULELINE~{ lv_requested_element } |.
+          APPEND lv_req_elem_final TO req_elem_final.
+          <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+          CONTINUE.
+        ENDIF.
+
+      ELSEIF bomcategory EQ 'M'.
+        READ TABLE mt_materialbomlink_dd03nd INTO DATA(ls_materialbomlink_dd03nd) WITH KEY name = lv_requested_element.
+        IF sy-subrc IS INITIAL.
+          lv_req_elem_final = |i_materialbomlink~{ lv_requested_element } |.
+          APPEND lv_req_elem_final TO req_elem_final.
+          <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+          CONTINUE.
+        ENDIF.
+      ENDIF.
+
+*      READ TABLE mt_bomusage_dd03nd INTO DATA(ls_bomusage_dd03nd) WITH KEY fieldname = lv_requested_element.
+*      IF sy-subrc IS INITIAL.
+*        lv_req_elem_final = |{ ls_bomusage_dd03nd-strucobjn }~{ lv_requested_element } |.
+*        APPEND lv_req_elem_final TO req_elem_final.
+*        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+*        CONTINUE.
+*      ENDIF.
+
+*I_PRODUCTTYPEVH
+      READ TABLE mt_producttype_dd03nd INTO DATA(ls_producttype_dd03nd) WITH KEY name = lv_requested_element.
+      IF sy-subrc IS INITIAL.
+        lv_req_elem_final = |I_PRODUCT~{ lv_requested_element } |.
+        APPEND lv_req_elem_final TO req_elem_final.
+        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+        CONTINUE.
+      ENDIF.
+
+
+*I_PLANTSTDVH
+      READ TABLE mt_plantdesc_dd03nd INTO DATA(ls_plantdesc_dd03nd) WITH KEY name = lv_requested_element.
+      IF sy-subrc IS INITIAL.
+        lv_req_elem_final = |I_PLANTSTDVH~{ lv_requested_element } |.
+        APPEND lv_req_elem_final TO req_elem_final.
+        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+        CONTINUE.
+      ENDIF.
+
+*I_PRODUCTDESCRIPTION
+      READ TABLE mt_proddesc_dd03nd INTO DATA(ls_proddesc_dd03nd) WITH KEY name = lv_requested_element.
+      IF sy-subrc IS INITIAL.
+        lv_req_elem_final = |I_PRODUCTDESCRIPTION~{ lv_requested_element } |.
+        APPEND lv_req_elem_final TO req_elem_final.
+        <ls_req_elem_with_table> = VALUE #( requested_element = lv_requested_element requested_element_with_table = lv_req_elem_final ).
+        CONTINUE.
+      ENDIF.
+    ENDLOOP.
+    requested_elements_string  = concat_lines_of( table = req_elem_final sep = `, ` ).
+  ENDMETHOD.
+
+
   METHOD sorting.
 *    Get all sort data in a table
     DATA(lt_sort_table) = VALUE string_table(
@@ -623,5 +617,28 @@ CLASS ZCL_ZBOM_HEADER_CE IMPLEMENTATION.
 
       select_from = |{ select_from } { lv_join_scheduleline }|.
     ENDIF.
+  ENDMETHOD.
+
+
+  METHOD filtering.
+*    Get all filters as string
+    sql_filter_esc_quotes = cl_abap_dyn_prg=>escape_quotes_str( io_request->get_filter(  )->get_as_sql_string(  ) ).
+*    REPLACE  ALL OCCURRENCES OF 'BILLOFMATERIALVARIANTUSAGE' IN sql_filter_esc_quotes WITH source_view && '~BILLOFMATERIALVARIANTUSAGE'.
+    REPLACE  ALL OCCURRENCES OF 'PLANT ' IN sql_filter_esc_quotes WITH source_view && '~PLANT '.
+    REPLACE  ALL OCCURRENCES OF source_view && '~PLANTNAME' IN sql_filter_esc_quotes WITH 'I_PlantStdVH' && '~PLANTNAME'.
+*    REPLACE  ALL OCCURRENCES OF source_view && '~BILLOFMATERIALVARIANTUSAGEDESC' IN sql_filter_esc_quotes WITH 'I_BILLOFMATERIALUSAGE' && '~BILLOFMATERIALVARIANTUSAGEDESC'.
+*  SalesOrder and SalesOrderItem empty in case of Material BOM
+    IF bomcategory = 'M'.
+      REPLACE ALL OCCURRENCES OF `SALESORDERITEM = '000000' AND SALESORDER = ' ' AND ` IN sql_filter_esc_quotes WITH ''.
+    ELSEIF bomcategory = 'K'.
+      IF sql_filter_esc_quotes CS 'SALESORDER'.
+        REPLACE ALL OCCURRENCES OF 'SALESORDER' IN sql_filter_esc_quotes WITH 'I_SalesOrderBOMLink~SALESORDER'.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD if_rap_query_provider~select.
+    select( EXPORTING io_request = io_request io_response = io_response ).
   ENDMETHOD.
 ENDCLASS.
